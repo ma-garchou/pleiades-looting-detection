@@ -12,7 +12,7 @@ An end-to-end, single-script pipeline that detects **looting pits** at archaeolo
 
 > Developed as part of the M2 *Géomatique et Modélisation Spatiale* at Aix-Marseille University.
 
-![Workflow](docs/workflow.png)
+![Workflow](docs/workflow_en.png)
 
 ---
 
@@ -57,7 +57,7 @@ Three iterations were needed to get there, and they are documented because they 
 pleiades-looting-detection/
 ├── detection_pillage.py   # the whole pipeline (single file)
 ├── requirements.txt
-├── docs/workflow.png      # method overview
+├── docs/workflow_en.png   # method overview
 ├── data/                  # ← put the Pléiades scenes here (not distributed)
 │   ├── Train_Image/Train_RGBPIR_Sudan.tif
 │   └── Validation_image/Validation_RGBPIR_{Sudan,Egypt}.tif
