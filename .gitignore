@@ -1,0 +1,33 @@
+# Données sous licence / sensibles — ne jamais publier
+data/**
+!data/README.md
+labels/**
+!labels/README.md
+*.tif
+*.tiff
+*.jp2
+*.gpkg
+*.shp
+*.npy
+
+# Poids (publiés via GitHub Releases, pas dans le dépôt)
+modeles/**
+!modeles/README.md
+modeles_test/
+*.pt
+*.pth
+
+# Sorties
+resultats/
+resultats_test/
+
+# Python / éditeurs
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

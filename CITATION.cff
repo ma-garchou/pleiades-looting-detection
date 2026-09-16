@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite it as below."
+title: "Archaeological looting pit detection from Pléiades imagery (U-Net / ResNet-50)"
+authors:
+  - family-names: Garchou
+    given-names: Mohamed-Ali
+    affiliation: "Aix-Marseille Université — M2 Géomatique et Modélisation Spatiale"
+version: 1.0.0
+date-released: 2026-09-16
+license: MIT
+repository-code: "https://github.com/ma-garchou/pleiades-looting-detection"
+keywords: [remote sensing, Pléiades, deep learning, semantic segmentation, U-Net, archaeology, looting]
