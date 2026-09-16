@@ -1,37 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-===============================================================================
- Détection automatique des fosses de pillage archéologique — images Pléiades
- U-Net + encodeur ResNet-50 (segmentation_models_pytorch)
--------------------------------------------------------------------------------
- Auteur : Mohamed-Ali Garchou — M2 Géomatique et Modélisation Spatiale (AMU)
+Détection de fosses de pillage sur images Pléiades (U-Net / ResNet-50).
+M.-A. Garchou - M2 GMS, Aix-Marseille Université
 
- Dépôt : https://github.com/ma-garchou/pleiades-looting-detection
+Usage :
+    python detection_pillage.py [--retrain] [--root CHEMIN] [--test-rapide]
 
- UTILISATION (une seule commande) :
-     python detection_pillage.py
-
- Le script enchaîne automatiquement :
-   1. Prétraitement de l'image TRAIN (ordre des bandes, rééchantillonnage 0,5 m,
-      normalisation)
-   2. Rasterisation de la vérité terrain (labels/labels_pillage.gpkg)
-   3. Entraînement de 2 modèles U-Net/ResNet-50 (graines 42 et 7)
-      -> étape sautée si les poids sont présents dans modeles/ ou
-         téléchargeables depuis les Releases GitHub (poids de nos résultats)
-   4. Prédiction sur les 2 images de validation (Soudan puis Égypte)
-   5. Résumé chiffré + figures dans resultats/
-
- Options :
-     --retrain        réentraîne les modèles même si modeles/*.pt existent
-     --root CHEMIN    dossier contenant Train_Image/ et Validation_image/
-                      (par défaut : data/, puis le dossier du script, puis son parent)
-     --test-rapide    exécution de contrôle très courte (1 époque, sans TTA)
-
- PROTOCOLE : le prétraitement et l'entraînement portent UNIQUEMENT sur l'image
- TRAIN. Les images de validation ne sont jamais modifiées ni apprises : elles
- sont lues telles quelles (lecture seule) au moment de la prédiction.
-===============================================================================
+Étapes : prétraitement du train, rasterisation des labels, entraînement
+(2 graines), prédiction sur les deux images de validation, résumé.
+Les images de validation sont seulement lues, jamais modifiées.
 """
 import argparse
 import json
@@ -48,32 +26,28 @@ from rasterio.enums import Resampling
 from rasterio.transform import from_origin
 from rasterio.warp import reproject
 
-# =============================================================================
-# 0. CONFIGURATION (valeurs exactes utilisées pour nos résultats)
-# =============================================================================
+# --- Paramètres ---
 HERE = Path(__file__).resolve().parent
 
-# Images : `order` = bandes à lire pour obtenir Rouge, Vert, Bleu, PIR.
-# ATTENTION : les fichiers du Soudan sont en B, G, R, PIR (malgré leur nom) ;
-# le fichier d'Égypte est bien en R, G, B, PIR.
+# order = bandes à lire pour avoir R, G, B, PIR (Soudan stocké en B, G, R, PIR)
 IMAGES = {
     "train_sudan": dict(rel="Train_Image/Train_RGBPIR_Sudan.tif", order=[3, 2, 1, 4], role="train"),
     "val_sudan":   dict(rel="Validation_image/Validation_RGBPIR_Sudan.tif", order=[3, 2, 1, 4], role="validation"),
     "val_egypt":   dict(rel="Validation_image/Validation_RGBPIR_Egypt.tif", order=[1, 2, 3, 4], role="validation"),
 }
-VALIDATIONS = ["val_sudan", "val_egypt"]      # ordre : 1) Soudan, 2) Égypte
+VALIDATIONS = ["val_sudan", "val_egypt"]
 NODATA_IN = 65535
-TARGET_RES = 0.5                                # m (image TRAIN rééchantillonnée)
-TARGET_CRS = "EPSG:32636"                       # UTM 36N
-# Zone commune TRAIN / VALIDATION Soudan (exclue du calcul des scores)
+TARGET_RES = 0.5
+TARGET_CRS = "EPSG:32636"  # UTM 36N
+# recouvrement train / val Soudan, exclu des scores
 OVERLAP_TRAIN_VAL = (221074.001, 2295270.175, 221551.531, 2295437.655)
 
 # Classes
 CLASSES = {0: "fond", 1: "fosse_pillage", 2: "deblais", 3: "vegetation"}
 N_CLASSES = 4
 IGNORE = 255
-SPOIL_BUFFER_M = 0.0        # anneau de déblais automatique désactivé (fosses ~2,8 m)
-NDVI_VEG_THRESHOLD = 0.30   # végétation automatique sur le TRAIN
+SPOIL_BUFFER_M = 0.0
+NDVI_VEG_THRESHOLD = 0.30
 
 # Réseau
 ARCH, ENCODER, ENCODER_WEIGHTS, IN_CHANNELS = "Unet", "resnet50", "imagenet", 4
@@ -87,9 +61,8 @@ SAMPLES_PER_EPOCH = 800
 P_CENTER_ON_PIT = 0.6
 LR = 3e-4
 WEIGHT_DECAY = 1e-4
-NUM_WORKERS = 2             # valeur utilisée pour nos résultats (garder 2)
+NUM_WORKERS = 2
 
-# Poids entraînés publiés sur GitHub (Releases). Laisser vide pour désactiver.
 MODELS_URL = "https://github.com/ma-garchou/pleiades-looting-detection/releases/download/v1.0/"
 
 # Prédiction / post-traitement
@@ -101,14 +74,11 @@ MIN_PIT_AREA_M2 = 1.0
 MATCH_DIST_M = 3.0
 
 
-# =============================================================================
-# Chemins
-# =============================================================================
+# --- Chemins ---
 class Paths:
     def __init__(self, root, test=False):
         self.root = Path(root)
         self.labels = HERE / "labels" / "labels_pillage.gpkg"
-        # le mode test écrit ailleurs pour ne jamais écraser les vrais modèles/résultats
         self.models = HERE / ("modeles_test" if test else "modeles")
         self.out = HERE / ("resultats_test" if test else "resultats")
         self.data = self.out / "donnees_pretraitees"
@@ -137,11 +107,9 @@ def log(msg):
     print(msg, flush=True)
 
 
-# =============================================================================
-# Lecture des images
-# =============================================================================
+# --- Lecture des images ---
 def read_rgbn(P, name):
-    """(uint16 4xHxW en R,G,B,PIR, masque valide, profil). Validation = lecture seule."""
+    """Renvoie l'image (R, G, B, PIR), le masque valide et le profil."""
     spec = IMAGES[name]
     if spec["role"] == "train":
         with rasterio.open(P.data / f"{name}_RGBN.tif") as src:
@@ -159,7 +127,7 @@ def pixel_size(profile):
 
 
 def load_image(P, name):
-    """Image normalisée (float32) avec les statistiques calculées sur le TRAIN."""
+    """Normalisation avec les percentiles du train."""
     raw, valid, profile = read_rgbn(P, name)
     img = raw.astype(np.float32)
     with open(P.data / "stats.json") as f:
@@ -173,9 +141,7 @@ def load_image(P, name):
     return out, valid, profile
 
 
-# =============================================================================
-# ÉTAPE 1 — Prétraitement de l'image TRAIN
-# =============================================================================
+# --- Étape 1 : Prétraitement de l'image TRAIN ---
 def step1_preprocess(P):
     log("\n=== ÉTAPE 1 : prétraitement de l'image TRAIN ===")
     name, spec = "train_sudan", IMAGES["train_sudan"]
@@ -219,9 +185,7 @@ def step1_preprocess(P):
         f"(≈ 0,12 attendu : ordre des bandes correct)")
 
 
-# =============================================================================
-# ÉTAPE 2 — Rasterisation de la vérité terrain
-# =============================================================================
+# --- Étape 2 : Rasterisation de la vérité terrain ---
 def step2_rasterize(P):
     import geopandas as gpd
     from rasterio.features import rasterize
@@ -309,9 +273,7 @@ def load_label(P, name):
         return src.read(1)
 
 
-# =============================================================================
-# Modèle, augmentations, inférence
-# =============================================================================
+# --- Modèle, augmentations, inférence ---
 def build_model(pretrained=True):
     import segmentation_models_pytorch as smp
     weights = ENCODER_WEIGHTS if pretrained and not os.environ.get("PILLAGE_NO_PRETRAIN") else None
@@ -328,7 +290,6 @@ def seed_everything(seed):
 
 
 def augment(x, y, rng):
-    """Rotations/miroirs (D4) + radiométrie + flou + bruit."""
     k, flip = rng.integers(4), rng.random() < 0.5
     x = np.rot90(x, k, axes=(1, 2))
     y = np.rot90(y, k, axes=(0, 1))
@@ -390,7 +351,6 @@ def predict_tta(model, batch, tta):
 
 
 def sliding_window(model, img, stride, tta, device, batch_size=8):
-    """Fenêtre glissante PATCH px avec fondu gaussien -> probabilités (N_CLASSES x H x W)."""
     import torch
     _, H, W = img.shape
     ph = max(0, PATCH - H) + (-(max(H, PATCH) - PATCH)) % stride
@@ -427,11 +387,9 @@ def scores_from_confusion(cm):
     return tp / np.maximum(tp + fp + fn, 1), 2 * tp / np.maximum(2 * tp + fp + fn, 1)
 
 
-# =============================================================================
-# ÉTAPE 3 — Entraînement
-# =============================================================================
+# --- Étape 3 : Entraînement ---
 class CropDataset:
-    """Extraits aléatoires CROP x CROP, dont P_CENTER_ON_PIT centrés sur une fosse."""
+
 
     def __init__(self, img, lab, n_samples, crop, seed):
         self.img, self.lab, self.n, self.crop = img, lab, n_samples, crop
@@ -470,7 +428,7 @@ class CropDataset:
 
 
 def class_weights(lab_train):
-    """Fond = 1 ; classe rare = sqrt(n_fond / n_classe), plafonné à 50 ; classe absente = 0."""
+    # poids = sqrt(n_fond / n_classe), max 50
     import torch
     counts = np.array([(lab_train == k).sum() for k in range(N_CLASSES)], float)
     w = np.zeros(N_CLASSES)
@@ -509,7 +467,7 @@ def train_one(P, seed, epochs, device):
         t0, tot = time.time(), 0.0
         for x, y in dl:
             x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
-            if (y != IGNORE).sum() == 0:
+            if (y != IGNORE).sum() == 0:  # lot entièrement hors AOI
                 continue
             opt.zero_grad(set_to_none=True)
             with torch.autocast(device_type="cuda", enabled=(device == "cuda")):
@@ -532,7 +490,6 @@ def train_one(P, seed, epochs, device):
 
 
 def try_download_model(P, seed):
-    """Télécharge les poids publiés (GitHub Releases) s'ils sont absents."""
     if not MODELS_URL:
         return False
     import torch
@@ -571,9 +528,7 @@ def load_models(P, device):
     return models
 
 
-# =============================================================================
-# ÉTAPE 4 — Prédiction sur les validations
-# =============================================================================
+# --- Étape 4 : Prédiction sur les validations ---
 def postprocess(prob_pit, valid, threshold, res):
     from scipy import ndimage as ndi
     binary = (prob_pit >= threshold) & valid
@@ -672,9 +627,7 @@ def step4_predict(P, device, stride, tta):
     return results
 
 
-# =============================================================================
-# ÉTAPE 5 — Diagnostic + résumé
-# =============================================================================
+# --- Étape 5 : diagnostic et résumé ---
 def object_scores(pred_bin, gt_pit, eval_mask, res):
     from scipy import ndimage as ndi
     from scipy.spatial import cKDTree
@@ -702,7 +655,6 @@ def object_scores(pred_bin, gt_pit, eval_mask, res):
 def step5_summary(P, device, results):
     log("\n=== ÉTAPE 5 : diagnostic et résumé ===")
     summary = {"validations": results}
-    # Diagnostic sur l'image TRAIN (ajustement du modèle à la vérité terrain)
     lab = load_label(P, "train_sudan")
     diag = "non calculé (labels absents)"
     if lab is not None:
@@ -714,7 +666,7 @@ def step5_summary(P, device, results):
                                        for k in (0, 1, 3)}
         diag = f"IoU fosse {iou[1]:.3f} · F1 fosse {f1[1]:.3f}"
     log(f"  TRAIN : {diag}")
-    # Scores sur les validations si une vérité de référence y a été digitalisée
+    # scores seulement si une référence existe sur la validation
     for name in VALIDATIONS:
         gt = load_label(P, name)
         if gt is None or (gt != IGNORE).sum() == 0:
@@ -739,12 +691,10 @@ def step5_summary(P, device, results):
     log("\n" + txt)
 
 
-# =============================================================================
-# Programme principal
-# =============================================================================
+# --- Programme principal ---
 def main():
     global EPOCHS, SAMPLES_PER_EPOCH
-    try:  # accents lisibles dans tous les terminaux (Windows compris)
+    try:
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
