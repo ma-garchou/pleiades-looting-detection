@@ -8,7 +8,7 @@
 ![GIS](https://img.shields.io/badge/GIS-rasterio%20%7C%20GeoPandas%20%7C%20QGIS-4B8BBE)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-An end-to-end, single-script pipeline that detects **looting pits** at archaeological sites in 50 cm **Pléiades** satellite imagery (R, G, B, NIR). The model was trained on **48 hand-digitised pits** from one scene of Saï Island, Sudan. It was then applied, **without any retuning**, to an unseen Sudanese scene and to a scene from a different country, Dahshur in Egypt.
+An end-to-end **very-high-resolution (VHR) imagery processing pipeline**, packaged as a single script, that detects **looting pits** at archaeological sites in 50 cm **Pléiades** satellite imagery (R, G, B, NIR). The model was trained on **48 hand-digitised pits** from one scene of Saï Island, Sudan. It was then applied, **without any retuning**, to an unseen Sudanese scene and to a scene from a different country, Dahshur in Egypt.
 
 > Developed as part of the M2 *Géomatique et Modélisation Spatiale* at Aix-Marseille University.
 
